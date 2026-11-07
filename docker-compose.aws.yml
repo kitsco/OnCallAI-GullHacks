@@ -1,0 +1,37 @@
+# Server-only add-on: send each container's logs to CloudWatch Logs.
+# Turned on by COMPOSE_FILE in the server's .env (see .env.example). Laptops skip this file.
+# Log groups: /oncall/payments-api, /oncall/fraud-check, /oncall/nginx, /oncall/postgres
+
+services:
+  payments-api:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /oncall/payments-api
+        awslogs-create-group: "true"
+        tag: "{{.Name}}"
+  fraud-check:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /oncall/fraud-check
+        awslogs-create-group: "true"
+        tag: "{{.Name}}"
+  nginx:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /oncall/nginx
+        awslogs-create-group: "true"
+        tag: "{{.Name}}"
+  postgres:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /oncall/postgres
+        awslogs-create-group: "true"
+        tag: "{{.Name}}"

@@ -1,0 +1,73 @@
+# OnCall AI demo app: the payment system the agent protects.
+# Settings come from .env (copy .env.example to .env first).
+name: oncall
+
+x-db-url: &db_url postgresql://oncall:${POSTGRES_PASSWORD:-oncall-dev-pw}@postgres:5432/payments
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: oncall
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oncall-dev-pw}
+      POSTGRES_DB: payments
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oncall -d payments"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  fraud-check:
+    build:
+      context: ./services
+      dockerfile: fraud-check/Dockerfile
+    image: oncall/fraud-check:latest
+    environment:
+      DATABASE_URL: *db_url
+      METRICS_ENABLED: ${METRICS_ENABLED:-0}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  payments-api:
+    build:
+      context: ./services
+      dockerfile: payments-api/Dockerfile
+      args:
+        RELEASE: ${IMAGE_TAG:-v1}
+    # IMAGE_TAG in .env decides which version runs: v1 (good) or v2 (rounding bug).
+    image: oncall/payments-api:${IMAGE_TAG:-v1}
+    environment:
+      DATABASE_URL: *db_url
+      FRAUD_URL: http://fraud-check:8000
+      METRICS_ENABLED: ${METRICS_ENABLED:-0}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-2}
+    deploy:
+      replicas: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      fraud-check:
+        condition: service_started
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - payments-api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
