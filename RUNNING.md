@@ -13,6 +13,26 @@ docker compose ps                # expect: postgres (healthy), fraud-check, 2x p
 ./scripts/smoke_test.sh          # 10 charges -> {"charge_id": ..., "status": "approved", ...}
 ```
 
+## AWS paging setup (once; safe to re-run)
+
+```bash
+python3.11 -m pip install --user boto3
+python3.11 infra/setup_aws.py
+```
+
+Creates the oncall- CloudWatch alarms, the SQS queue oncall-incidents, the EventBridge rule
+oncall-alarm-to-sqs, and the DynamoDB tables incidents and deployments.
+
+| Alarm | Fires when (2 periods of 30 s in a row) |
+| --- | --- |
+| oncall-payments-error-rate | more than 5% of charges fail |
+| oncall-payments-latency | payments-api p95 above 500 ms |
+| oncall-payments-cpu | payments-api CPU above 70% of a core |
+| oncall-db-connections | more than 70 Postgres connections |
+| oncall-payments-restarts / oncall-fraud-restarts | any container restart (1 period) |
+
+There is deliberately no alarm on fraud-check latency: the agent has to work that out.
+
 ## After pulling new code
 
 ```bash
@@ -25,6 +45,7 @@ git pull
 | What | Command |
 | --- | --- |
 | See logs | `docker compose logs -f payments-api` |
+| See what the publisher sends | `docker compose logs --tail 3 publisher` |
 | Scale payments-api | `docker compose up -d --scale payments-api=4` |
 | Flip a chaos flag | `docker compose exec -T postgres psql -U oncall -d payments -c "UPDATE chaos_flags SET value='1500' WHERE name='fraud_latency_ms';"` |
 | See all flags | `docker compose exec -T postgres psql -U oncall -d payments -c "SELECT * FROM chaos_flags;"` |

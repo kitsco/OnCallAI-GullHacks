@@ -59,6 +59,25 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  publisher:
+    build:
+      context: ./publisher
+    image: oncall/publisher:latest
+    environment:
+      DATABASE_URL: *db_url
+      METRICS_ENABLED: ${METRICS_ENABLED:-0}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-2}
+      COMPOSE_PROJECT: oncall
+      WATCH_SERVICES: payments-api,fraud-check
+    volumes:
+      # Read-only access to Docker so it can read container stats and restart counts.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   nginx:
     image: nginx:1.27-alpine
     ports:
