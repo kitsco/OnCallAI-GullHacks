@@ -88,5 +88,17 @@ services:
       - payments-api
     restart: unless-stopped
 
+  locust:
+    image: locustio/locust:latest
+    # Starts 20 shoppers right away. faults.py / the dashboard change the count via localhost:8089/swarm.
+    command: -f /mnt/locust/locustfile.py --host http://nginx --users 20 --spawn-rate 5 --autostart
+    volumes:
+      - ./loadgen:/mnt/locust:ro
+    ports:
+      - "127.0.0.1:8089:8089"   # only reachable from the server itself
+    depends_on:
+      - nginx
+    restart: unless-stopped
+
 volumes:
   pgdata:

@@ -40,6 +40,17 @@ git pull
 ./scripts/build_images.sh && docker compose up -d
 ```
 
+## Faults and reset (scripts/faults.py)
+
+```bash
+python3.11 scripts/faults.py status        # version, flags, containers
+python3.11 scripts/faults.py slow_fraud    # or bad_deploy | rush | db_leak
+python3.11 scripts/faults.py reset         # back to healthy (run before EVERY test)
+```
+
+Traffic: the `locust` container runs 20 shoppers all the time. Its web UI is only on the server
+(localhost:8089); `rush` raises it to 300 and `reset` puts it back to 20.
+
 ## Useful commands
 
 | What | Command |
