@@ -9,14 +9,22 @@ If Gemini is unavailable (no key, rate limit, network), simple fallback rules di
 from the snapshot instead, and the incident says so. The demo never stalls.
 """
 import json
+import logging
 import time
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
 from agent import evidence
-from agent.config import (ALLOWED_ACTIONS, GEMINI_API_KEY, GEMINI_MODEL, MAX_TOOL_CALLS, REPO_ROOT,
-                          SCALE_MAX, SCALE_MIN)
+from agent.config import (AI_BUDGET_S, ALLOWED_ACTIONS, GEMINI_API_KEY, GEMINI_CALL_TIMEOUT_S,
+                          GEMINI_FALLBACK_MODELS, GEMINI_MODEL, MAX_TOOL_CALLS, REPO_ROOT, SCALE_MAX, SCALE_MIN)
+
+# The SDK prints a long advisory every call when tools are used; it is harmless here.
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
+
+
+class AIBudgetExceeded(Exception):
+    pass
 
 RootCause = Literal["bad_deploy", "traffic_spike", "slow_dependency", "db_connections", "unknown"]
 Action = Literal["rollback", "scale", "restart", "fallback", "none"]
@@ -140,23 +148,47 @@ def make_tools(record_step):
 
 def _client():
     from google import genai
+    from google.genai import types
 
-    return genai.Client(api_key=GEMINI_API_KEY)
+    return genai.Client(api_key=GEMINI_API_KEY,
+                        http_options=types.HttpOptions(timeout=GEMINI_CALL_TIMEOUT_S * 1000))
 
 
-def _with_retries(fn, attempts=3):
+_last_good = {"model": None}
+
+
+def _models():
+    seen, order = set(), []
+    for m in [_last_good["model"], GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]:
+        if not m:
+            continue
+        if m not in seen:
+            seen.add(m)
+            order.append(m)
+    return order
+
+
+def _call(client, deadline, contents, config):
+    """One Gemini request: tries each model once (overloaded/rate-limited -> next model), within the deadline."""
     last = None
-    for i in range(attempts):
+    for model in _models():
+        if time.time() > deadline:
+            raise AIBudgetExceeded(f"AI time budget of {AI_BUDGET_S} s used up")
         try:
-            return fn()
-        except Exception as exc:  # rate limits, network blips
+            response = client.models.generate_content(model=model, contents=contents, config=config)
+            _last_good["model"] = model  # start with the model that last worked
+            return response, model
+        except Exception as exc:
             last = exc
-            print(f"  gemini error (try {i + 1}/{attempts}): {exc!r}", flush=True)
-            time.sleep(2 * (i + 1))
+            text = repr(exc)
+            print(f"  gemini error on {model}: {text[:160]}", flush=True)
+            if not any(code in text for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND",
+                                                  "imeout", "Deadline")):
+                raise  # a real error (bad request, bad key): don't hide it behind other models
     raise last
 
 
-def _investigate(client, alarm_text, snapshot_text, record_step) -> str:
+def _investigate(client, deadline, alarm_text, snapshot_text, record_step) -> str:
     from google.genai import types
 
     prompt = (f"ALARM:\n{alarm_text}\n\nEVIDENCE SNAPSHOT:\n{snapshot_text}\n\nRUNBOOKS:\n{_runbooks()}\n\n"
@@ -168,11 +200,12 @@ def _investigate(client, alarm_text, snapshot_text, record_step) -> str:
         automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=MAX_TOOL_CALLS),
         temperature=0.2,
     )
-    response = _with_retries(lambda: client.models.generate_content(model=GEMINI_MODEL, contents=prompt, config=config))
+    response, model = _call(client, deadline, prompt, config)
+    print(f"  investigation done with {model}", flush=True)
     return response.text or ""
 
 
-def _conclude(client, alarm_text, snapshot_text, findings) -> Diagnosis:
+def _conclude(client, deadline, alarm_text, snapshot_text, findings) -> Diagnosis:
     from google.genai import types
 
     prompt = (f"ALARM:\n{alarm_text}\n\nEVIDENCE SNAPSHOT:\n{snapshot_text}\n\nYOUR FINDINGS:\n{findings}\n\n"
@@ -183,7 +216,7 @@ def _conclude(client, alarm_text, snapshot_text, findings) -> Diagnosis:
         response_schema=_DiagnosisOut,
         temperature=0,
     )
-    response = _with_retries(lambda: client.models.generate_content(model=GEMINI_MODEL, contents=prompt, config=config))
+    response, _ = _call(client, deadline, prompt, config)
     raw = json.loads(response.text)
     return Diagnosis(
         root_cause=raw["root_cause"], summary=raw["summary"], evidence=raw.get("evidence", []),
@@ -254,14 +287,17 @@ def diagnose(alarm_text: str, snap: dict, record_step):
     if GEMINI_API_KEY:
         try:
             client = _client()
-            findings = _investigate(client, alarm_text, snap["text"], record_step)
-            diag = _conclude(client, alarm_text, snap["text"], findings)
+            deadline = time.time() + AI_BUDGET_S
+            findings = _investigate(client, deadline, alarm_text, snap["text"], record_step)
+            diag = _conclude(client, deadline, alarm_text, snap["text"], findings)
             problem = guardrail_problem(diag.proposed_action)
             if problem:
                 record_step(f"Guardrail blocked the proposed fix ({problem}); asking a human instead")
                 diag.proposed_action = ProposedAction(action="none", service="none",
                                                       explain=f"Proposed fix blocked by guardrail: {problem}")
             return diag, "gemini"
+        except AIBudgetExceeded:
+            record_step(f"AI took longer than {AI_BUDGET_S} s; using backup rules")
         except (ValidationError, KeyError, ValueError) as exc:
             record_step(f"AI answer was not valid ({type(exc).__name__}); using backup rules")
         except Exception as exc:

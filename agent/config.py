@@ -27,7 +27,12 @@ DEPLOYMENTS_TABLE = "deployments"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
-MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "6"))
+# Tried in order when a model is overloaded (503) or rate-limited (429).
+GEMINI_FALLBACK_MODELS = [m.strip() for m in os.getenv(
+    "GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite").split(",") if m.strip()]
+MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "5"))
+GEMINI_CALL_TIMEOUT_S = int(os.getenv("GEMINI_CALL_TIMEOUT_S", "40"))   # per request
+AI_BUDGET_S = int(os.getenv("AI_BUDGET_S", "100"))                      # whole AI diagnosis, then backup rules
 
 SERVICES = ("payments-api", "fraud-check", "postgres")
 METRICS = ("Requests", "Errors", "LatencyP95", "FraudLatencyP95", "CPU", "Memory",

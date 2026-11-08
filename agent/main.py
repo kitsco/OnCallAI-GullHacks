@@ -35,8 +35,12 @@ def parse_alarm(message_body: str):
 
 def investigate(incident: dict, alarm_name: str, reason: str):
     inc_id = incident["incident_id"]
+    seen = set()
 
     def record_step(text: str):
+        if text in seen:  # the AI may repeat a check; show each finding once
+            return
+        seen.add(text)
         store.add_step(inc_id, text)
 
     record_step(f"Paged by alarm {alarm_name}")

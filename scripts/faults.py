@@ -134,11 +134,35 @@ def db_leak():
 FAULTS = {"bad_deploy": bad_deploy, "rush": rush, "slow_fraud": slow_fraud, "db_leak": db_leak}
 
 
-def trigger_fault(name: str):
+def active_faults() -> list:
+    """Which faults are on right now (so tests don't stack two faults by accident)."""
+    active = []
+    if current_tag() != "v1":
+        active.append("bad_deploy")
+    flags = get_flags()
+    if flags.get("fraud_latency_ms", "0") not in ("0", ""):
+        active.append("slow_fraud")
+    if flags.get("leak_db_connections") == "on":
+        active.append("db_leak")
+    try:
+        with urllib.request.urlopen(f"{LOCUST_URL}/stats/requests", timeout=3) as resp:
+            if json.load(resp).get("user_count", 0) > NORMAL_USERS:
+                active.append("rush")
+    except Exception:
+        pass
+    return active
+
+
+def trigger_fault(name: str, force: bool = False):
     if name not in FAULTS:
         raise ValueError(f"unknown fault {name!r}; use one of {list(FAULTS)}")
+    already = active_faults()
+    if already and not force:
+        print(f"== refused: {', '.join(already)} is still active. Run reset first (or use --force).")
+        return False
     print(f"== fault: {name}")
     FAULTS[name]()
+    return True
 
 
 def reset():
@@ -159,6 +183,7 @@ def reset():
 
 
 def status():
+    print("active faults:", ", ".join(active_faults()) or "none")
     print("IMAGE_TAG:", current_tag())
     print("flags:", json.dumps(get_flags()))
     print(_compose("ps", "--format", "table {{.Service}}\t{{.Status}}").stdout)
@@ -167,7 +192,7 @@ def status():
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command in FAULTS:
-        trigger_fault(command)
+        trigger_fault(command, force="--force" in sys.argv)
     elif command == "reset":
         reset()
     elif command == "status":
