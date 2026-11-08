@@ -67,6 +67,20 @@ tiles and charts come from CloudWatch, incidents from DynamoDB. On a laptop, pla
 Revenue at risk = failed charges + charges slower than 1 s (shoppers abandon slow checkouts),
 over the current or most recent bad stretch, until Reset.
 
+## The agent (Parts A + B)
+
+```bash
+python3.11 -m pip install --user google-genai pydantic boto3
+python3.11 -m agent.check          # Gemini reachable? key OK? AWS metrics readable?
+# in its own tmux window (Ctrl+B, then C):
+cd ~/OnCallAI-GullHacks && python3.11 -m agent.main
+```
+
+The agent reads pages from SQS, opens an incident in DynamoDB, gathers evidence, asks Gemini
+(read-only tools), and proposes one allowed fix -> AWAITING_APPROVAL on the dashboard.
+If Gemini is unavailable it uses backup rules and says so on the card.
+Change the model with GEMINI_MODEL=... in .env (agent.check lists the models your key can use).
+
 ## Useful commands
 
 | What | Command |
