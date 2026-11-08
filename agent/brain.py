@@ -26,6 +26,24 @@ logging.getLogger("google_genai.models").setLevel(logging.ERROR)
 class AIBudgetExceeded(Exception):
     pass
 
+
+# What the AI actually did on the last diagnosis (shown on the dashboard as proof of real API calls).
+TRACE = {}
+
+
+def _usage(response):
+    meta = getattr(response, "usage_metadata", None)
+    if not meta:
+        return {}
+    return {"prompt_tokens": getattr(meta, "prompt_token_count", None),
+            "output_tokens": getattr(meta, "candidates_token_count", None),
+            "total_tokens": getattr(meta, "total_token_count", None)}
+
+
+def _note_tool(name, args, result):
+    TRACE.setdefault("tool_calls", []).append(
+        {"tool": name, "args": args, "result": str(result)[:240], "at": time.strftime("%H:%M:%S", time.gmtime())})
+
 RootCause = Literal["bad_deploy", "traffic_spike", "slow_dependency", "db_connections", "unknown"]
 Action = Literal["rollback", "scale", "restart", "fallback", "none"]
 Service = Literal["payments-api", "fraud-check", "none"]
@@ -110,6 +128,7 @@ def make_tools(record_step):
         if not (evidence.valid_service(service) and evidence.valid_metric(metric)):
             return "Unknown service or metric."
         result = evidence.summarize_metric(service, metric)["text"]
+        _note_tool("check_metric", {"service": service, "metric": metric}, result)
         record_step(f"Checked {result}")
         return result
 
@@ -120,6 +139,7 @@ def make_tools(record_step):
             service: payments-api or fraud-check
         """
         result = evidence.deploys_text(service, 60)
+        _note_tool("check_recent_deploys", {"service": service}, result)
         record_step(result)
         return result
 
@@ -130,6 +150,7 @@ def make_tools(record_step):
             service: payments-api or fraud-check
         """
         result = evidence.top_errors(service, 10)
+        _note_tool("search_error_logs", {"service": service}, result)
         record_step(f"Searched logs. {result}")
         return result
 
@@ -140,6 +161,7 @@ def make_tools(record_step):
             service: payments-api or fraud-check
         """
         result = evidence.request_timing(service, 3)
+        _note_tool("check_request_timing", {"service": service}, result)
         record_step(f"Checked request timing. {result}")
         return result
 
@@ -182,6 +204,7 @@ def _call(client, deadline, contents, config):
             last = exc
             text = repr(exc)
             print(f"  gemini error on {model}: {text[:160]}", flush=True)
+            TRACE.setdefault("attempts", []).append({"model": model, "error": text[:120]})
             if not any(code in text for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND",
                                                   "imeout", "Deadline")):
                 raise  # a real error (bad request, bad key): don't hide it behind other models
@@ -200,8 +223,11 @@ def _investigate(client, deadline, alarm_text, snapshot_text, record_step) -> st
         automatic_function_calling=types.AutomaticFunctionCallingConfig(maximum_remote_calls=MAX_TOOL_CALLS),
         temperature=0.2,
     )
+    started = time.time()
     response, model = _call(client, deadline, prompt, config)
     print(f"  investigation done with {model}", flush=True)
+    TRACE["investigation"] = {"model": model, "seconds": round(time.time() - started, 1), **_usage(response)}
+    TRACE["findings"] = (response.text or "")[:2000]
     return response.text or ""
 
 
@@ -216,7 +242,10 @@ def _conclude(client, deadline, alarm_text, snapshot_text, findings) -> Diagnosi
         response_schema=_DiagnosisOut,
         temperature=0,
     )
-    response, _ = _call(client, deadline, prompt, config)
+    started = time.time()
+    response, model = _call(client, deadline, prompt, config)
+    TRACE["conclusion"] = {"model": model, "seconds": round(time.time() - started, 1), **_usage(response)}
+    TRACE["raw_json"] = (response.text or "")[:2000]
     raw = json.loads(response.text)
     return Diagnosis(
         root_cause=raw["root_cause"], summary=raw["summary"], evidence=raw.get("evidence", []),
@@ -283,7 +312,9 @@ def rule_based(snap: dict) -> Diagnosis:
 
 
 def diagnose(alarm_text: str, snap: dict, record_step):
-    """Returns (Diagnosis, source) where source is 'gemini' or 'rules'."""
+    """Returns (Diagnosis, source) where source is 'gemini' or 'rules'. Fills TRACE as it goes."""
+    TRACE.clear()
+    TRACE["started_utc"] = time.strftime("%H:%M:%S", time.gmtime())
     if GEMINI_API_KEY:
         try:
             client = _client()
@@ -304,6 +335,7 @@ def diagnose(alarm_text: str, snap: dict, record_step):
             record_step(f"AI unavailable ({type(exc).__name__}); using backup rules")
     else:
         record_step("No GEMINI_API_KEY set; using backup rules")
+    TRACE["model"] = "backup rules (no AI)"
     return rule_based(snap), "rules"
 
 

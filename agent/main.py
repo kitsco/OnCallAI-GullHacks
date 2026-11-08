@@ -78,6 +78,7 @@ def investigate(incident: dict, alarm_name: str, reason: str):
         },
         proposed_action=proposed,
         diagnosed_at=store.now_iso(),
+        ai_trace=dict(brain.TRACE),  # proof of the real Gemini calls: models, timings, tokens, tool calls, raw output
     )
     log(f"{inc_id}: {diag.root_cause} ({source}, confidence {diag.confidence:.0%}) -> {proposed}")
 

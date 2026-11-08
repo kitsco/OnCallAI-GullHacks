@@ -68,6 +68,42 @@ def trend(history, col, minutes, bad_when_up):
     return f":{colour}[{minutes}m {text}]"
  
  
+def ai_trace_panel(inc, d):
+    """Proof that a real AI made the diagnosis: models, timings, tokens, tool calls, raw output."""
+    trace = inc.get("ai_trace") or {}
+    if not trace:
+        return
+    inv, con = trace.get("investigation") or {}, trace.get("conclusion") or {}
+    calls = trace.get("tool_calls") or []
+    if d.get("source") == "gemini" and inv:
+        tokens = (inv.get("total_tokens") or 0) + (con.get("total_tokens") or 0)
+        seconds = (inv.get("seconds") or 0) + (con.get("seconds") or 0)
+        st.caption(f"Diagnosed by Gemini (`{con.get('model') or inv.get('model')}`) · 2 API calls · "
+                   f"{len(calls)} tool calls requested by the model · {tokens:,} tokens · {seconds:.1f} s")
+    else:
+        st.caption("Diagnosed by backup rules (AI unavailable): no Gemini call succeeded")
+    with st.expander("Raw AI trace: what Gemini actually did"):
+        for a in trace.get("attempts") or []:
+            st.markdown(f"- Tried `{a['model']}`: {a['error']}")
+        if calls:
+            st.markdown("**Tools Gemini chose to call** (function calling, in order):")
+            for c in calls:
+                args = ", ".join(f"{k}={v}" for k, v in (c.get("args") or {}).items())
+                st.code(f"{c.get('at', '')}  {c['tool']}({args})\n-> {c.get('result', '')}", language="text")
+        if trace.get("findings"):
+            st.markdown("**Gemini's own findings** (verbatim):")
+            st.markdown("> " + trace["findings"].replace("\n", "\n> "))
+        if trace.get("raw_json"):
+            st.markdown("**Gemini's structured answer** (raw JSON, validated by our code before use):")
+            st.code(trace["raw_json"], language="json")
+        if inv:
+            st.caption(f"Investigation: {inv.get('model')} · {inv.get('seconds')} s · "
+                       f"{inv.get('prompt_tokens')} prompt / {inv.get('output_tokens')} output tokens")
+        if con:
+            st.caption(f"Conclusion: {con.get('model')} · {con.get('seconds')} s · "
+                       f"{con.get('prompt_tokens')} prompt / {con.get('output_tokens')} output tokens")
+
+
 def incident_card(inc):
     status = inc["status"]
     inc_id = inc["incident_id"]
@@ -91,6 +127,7 @@ def incident_card(inc):
                 f"**Confidence:** {d['confidence']:.0%}\n\n"
                 f"**Proposed fix:** {fix['explain']}"
             )
+            ai_trace_panel(inc, d)
  
         if status == "AWAITING_APPROVAL":
             a, r = st.columns(2)
