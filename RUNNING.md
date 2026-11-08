@@ -57,10 +57,10 @@ Traffic: the `locust` container runs 20 shoppers all the time. Its web UI is onl
 python3.11 -m pip install --user streamlit==1.67.0 pandas==3.1.1 boto3
 # in its own tmux window (Ctrl+B, then C):
 cd ~/OnCallAI-GullHacks
-ONCALL_DATA=real python3.11 -m streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+ONCALL_DATA=real python3.11 -m streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false
 ```
 
-Open http://52.14.248.26:8501 (hackathon Wi-Fi only). Buttons really break the system (scripts/faults.py),
+Open http://52.14.248.26/ (nginx forwards / to the dashboard; the Wi-Fi blocks port 8501). Buttons really break the system (scripts/faults.py),
 tiles and charts come from CloudWatch, incidents from DynamoDB. On a laptop, plain
 `streamlit run dashboard/app.py` uses the fake data instead.
 

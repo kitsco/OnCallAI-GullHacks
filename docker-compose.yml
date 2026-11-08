@@ -82,6 +82,9 @@ services:
     image: nginx:1.27-alpine
     ports:
       - "80:80"
+    extra_hosts:
+      # lets nginx reach the Streamlit dashboard running directly on the server (port 8501)
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
