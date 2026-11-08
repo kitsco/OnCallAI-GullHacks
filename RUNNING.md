@@ -106,6 +106,17 @@ Approve on the dashboard -> status REMEDIATING -> the agent runs the fix through
 -> VERIFYING (waits for alarms to clear, up to 5 min) -> RESOLVED with a postmortem, or FAILED.
 Every fix is visible in Systems Manager -> Run Command -> Command history, and in CloudTrail.
 
+## Demo shop
+
+http://52.14.248.26/shop/ : a fictional store whose Pay button sends real charges to /charges.
+Shows each payment's real response time, failures, and which fraud check answered (model / fallback).
+
+## Evaluation
+
+Every fault injected (dashboard or CLI) is logged to eval/fault_log.csv automatically.
+After the runs: `python3.11 eval/export_incidents.py --since HH:MM` (UTC) -> eval/results.csv plus a
+Markdown summary table (detection, diagnosis, recovery times, accuracy) to paste into the slides.
+
 ## Useful commands
 
 | What | Command |

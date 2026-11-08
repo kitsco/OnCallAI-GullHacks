@@ -19,7 +19,7 @@ REGION = os.getenv("AWS_REGION", "us-east-2")
 NAMESPACE = "OnCallAI"
 QUEUE_NAME = "oncall-incidents"
 RULE_NAME = "oncall-alarm-to-sqs"
-PERIOD = 30  # seconds; our metrics are high resolution, so 30-second alarm periods are allowed
+PERIOD = 10  # seconds; our metrics are high resolution, so 10-second alarm periods are allowed
 
 cloudwatch = boto3.client("cloudwatch", region_name=REGION)
 sqs = boto3.client("sqs", region_name=REGION)
@@ -27,8 +27,8 @@ events = boto3.client("events", region_name=REGION)
 dynamodb = boto3.client("dynamodb", region_name=REGION)
 
 
-def simple_alarm(alarm_name, description, metric_name, service, stat, threshold, evaluations=2):
-    """Alarm on one metric: fires when `evaluations` periods in a row cross the threshold."""
+def simple_alarm(alarm_name, description, metric_name, service, stat, threshold, evaluations=3):
+    """Alarm on one metric: fires when `evaluations` 10-second periods in a row (30 s) cross the threshold."""
     cloudwatch.put_metric_alarm(
         AlarmName=alarm_name,
         AlarmDescription=description,
@@ -80,8 +80,8 @@ def error_rate_alarm():
                 "ReturnData": True,
             },
         ],
-        EvaluationPeriods=2,
-        DatapointsToAlarm=2,
+        EvaluationPeriods=3,
+        DatapointsToAlarm=3,
         Threshold=5,
         ComparisonOperator="GreaterThanThreshold",
         TreatMissingData="notBreaching",

@@ -131,6 +131,19 @@ def db_leak():
     set_flag("leak_db_connections", "on")
 
 
+FAULT_LOG = REPO / "eval" / "fault_log.csv"
+
+
+def _log_fault(name: str):
+    """Records when each fault was injected (eval/export_incidents.py matches these to incidents)."""
+    FAULT_LOG.parent.mkdir(exist_ok=True)
+    new = not FAULT_LOG.exists()
+    with FAULT_LOG.open("a") as f:
+        if new:
+            f.write("injected_at,fault\n")
+        f.write(f"{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')},{name}\n")
+
+
 FAULTS = {"bad_deploy": bad_deploy, "rush": rush, "slow_fraud": slow_fraud, "db_leak": db_leak}
 
 
@@ -161,6 +174,7 @@ def trigger_fault(name: str, force: bool = False):
         print(f"== refused: {', '.join(already)} is still active. Run reset first (or use --force).")
         return False
     print(f"== fault: {name}")
+    _log_fault(name)
     FAULTS[name]()
     return True
 

@@ -1,6 +1,6 @@
 """Fake Black Friday shoppers for OnCall AI.
 
-Each Shopper sends POST /charges with a random amount, a fake test token, and one of
+Each Shopper sends POST /charges with a random amount ($5 to $120), a fake test token, and one of
 5 fake merchants, waiting 0.5 to 2 s between charges (about 0.8 charges/s per shopper).
   20 shoppers  ~ 16 charges/s   (normal day; always running)
   300 shoppers ~ 240 charges/s  (the "rush" fault)
@@ -22,7 +22,7 @@ class Shopper(HttpUser):
     @task
     def buy(self):
         payload = {
-            "amount": round(random.uniform(5, 500), 2),
+            "amount": round(random.uniform(5, 120), 2),
             "currency": "USD",
             "card_token": f"tok_test_{random.randint(1000, 999999)}",  # fake token, never a card number
             "merchant_id": random.choice(MERCHANTS),
