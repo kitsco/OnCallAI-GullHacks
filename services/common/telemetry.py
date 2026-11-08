@@ -11,6 +11,9 @@ import os
 
 SERVICE = os.getenv("SERVICE_NAME", "unknown")
 RELEASE = os.getenv("RELEASE", "v1")
+# A charge that succeeds but takes longer than this counts as "at risk":
+# shoppers abandon slow checkouts. Failed charges (5xx) are always at risk.
+SLOW_THRESHOLD_MS = float(os.getenv("SLOW_THRESHOLD_MS", "1000"))
 
 
 def utcnow_iso() -> str:
@@ -46,6 +49,7 @@ class Metrics:
         self.requests = 0
         self.errors = 0
         self.failed_amount = 0.0
+        self.slow_amount = 0.0
         self.latencies = []
         self.dep_latencies = []
 
@@ -55,6 +59,8 @@ class Metrics:
             self.errors += 1
             if amount:
                 self.failed_amount += float(amount)
+        elif latency_ms >= SLOW_THRESHOLD_MS and amount:
+            self.slow_amount += float(amount)
         self.latencies.append(latency_ms)
         if dep_ms is not None:
             self.dep_latencies.append(dep_ms)
@@ -73,6 +79,7 @@ class Metrics:
             "requests": self.requests,
             "errors": self.errors,
             "failed_amount": self.failed_amount,
+            "slow_amount": self.slow_amount,
             "p95": p95(self.latencies),
             "dep_p95": p95(self.dep_latencies),
         }
@@ -84,6 +91,7 @@ class Metrics:
             self._datum("Requests", snap["requests"], "Count"),
             self._datum("Errors", snap["errors"], "Count"),
             self._datum("FailedAmountUSD", snap["failed_amount"], "None"),
+            self._datum("SlowAmountUSD", snap["slow_amount"], "None"),
         ]
         if snap["p95"] is not None:
             data.append(self._datum("LatencyP95", snap["p95"], "Milliseconds"))

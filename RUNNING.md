@@ -51,6 +51,22 @@ python3.11 scripts/faults.py reset         # back to healthy (run before EVERY t
 Traffic: the `locust` container runs 20 shoppers all the time. Its web UI is only on the server
 (localhost:8089); `rush` raises it to 300 and `reset` puts it back to 20.
 
+## Dashboard on the server (real data)
+
+```bash
+python3.11 -m pip install --user streamlit==1.67.0 pandas==3.1.1 boto3
+# in its own tmux window (Ctrl+B, then C):
+cd ~/OnCallAI-GullHacks
+ONCALL_DATA=real python3.11 -m streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+```
+
+Open http://52.14.248.26:8501 (hackathon Wi-Fi only). Buttons really break the system (scripts/faults.py),
+tiles and charts come from CloudWatch, incidents from DynamoDB. On a laptop, plain
+`streamlit run dashboard/app.py` uses the fake data instead.
+
+Revenue at risk = failed charges + charges slower than 1 s (shoppers abandon slow checkouts),
+over the current or most recent bad stretch, until Reset.
+
 ## Useful commands
 
 | What | Command |
