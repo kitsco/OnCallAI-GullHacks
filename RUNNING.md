@@ -81,6 +81,31 @@ The agent reads pages from SQS, opens an incident in DynamoDB, gathers evidence,
 If Gemini is unavailable it uses backup rules and says so on the card.
 Change the model with GEMINI_MODEL=... in .env (agent.check lists the models your key can use).
 
+## Part C: letting the agent act (one-time AWS setup in the console, Ohio)
+
+1. **SSM document** - Systems Manager -> Documents -> Create document -> Command or Session.
+   Name `OnCall-Remediate`, type Command, content = JSON from `infra/oncall-remediate-document.json`.
+2. **Agent role** - IAM -> Roles -> Create role -> Custom trust policy = `infra/agent-trust-policy.json`.
+   No managed policies. Name `oncall-agent-role`. Then on the role: Add permissions -> Create inline
+   policy -> JSON = `infra/agent-permissions-policy.json`, name `oncall-agent-permissions`.
+3. **Server profile** (once):
+   ```bash
+   mkdir -p ~/.aws && cat >> ~/.aws/config <<'CFG'
+   [profile oncall-agent]
+   role_arn = arn:aws:iam::176169048305:role/oncall-agent-role
+   credential_source = Ec2InstanceMetadata
+   region = us-east-2
+   CFG
+   echo "AGENT_AWS_PROFILE=oncall-agent" >> .env
+   aws sts get-caller-identity --profile oncall-agent      # -> assumed-role/oncall-agent-role
+   ```
+4. Proof the role is narrow (should say AccessDenied):
+   `aws ssm send-command --profile oncall-agent --document-name AWS-RunShellScript --instance-ids i-0d68125efeb1bd27c --parameters commands=whoami`
+
+Approve on the dashboard -> status REMEDIATING -> the agent runs the fix through `OnCall-Remediate`
+-> VERIFYING (waits for alarms to clear, up to 5 min) -> RESOLVED with a postmortem, or FAILED.
+Every fix is visible in Systems Manager -> Run Command -> Command history, and in CloudTrail.
+
 ## Useful commands
 
 | What | Command |

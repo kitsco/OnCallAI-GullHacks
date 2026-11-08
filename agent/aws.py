@@ -3,12 +3,18 @@ from decimal import Decimal
 
 import boto3
 
-from agent.config import DEPLOYMENTS_TABLE, INCIDENTS_TABLE, QUEUE_NAME, REGION
+from agent.config import AGENT_AWS_PROFILE, DEPLOYMENTS_TABLE, INCIDENTS_TABLE, QUEUE_NAME, REGION
 
-cloudwatch = boto3.client("cloudwatch", region_name=REGION)
-logs = boto3.client("logs", region_name=REGION)
-sqs = boto3.client("sqs", region_name=REGION)
-_dynamodb = boto3.resource("dynamodb", region_name=REGION)
+# With AGENT_AWS_PROFILE set, every AWS call the agent makes uses its own narrow IAM role
+# (oncall-agent-role), assumed from the server role and refreshed automatically by boto3.
+session = boto3.Session(profile_name=AGENT_AWS_PROFILE) if AGENT_AWS_PROFILE else boto3.Session()
+
+cloudwatch = session.client("cloudwatch", region_name=REGION)
+logs = session.client("logs", region_name=REGION)
+sqs = session.client("sqs", region_name=REGION)
+ssm = session.client("ssm", region_name=REGION)
+sts = session.client("sts", region_name=REGION)
+_dynamodb = session.resource("dynamodb", region_name=REGION)
 incidents = _dynamodb.Table(INCIDENTS_TABLE)
 deployments = _dynamodb.Table(DEPLOYMENTS_TABLE)
 
@@ -41,3 +47,11 @@ def from_dynamo(value):
     if isinstance(value, list):
         return [from_dynamo(v) for v in value]
     return value
+
+
+def identity() -> str:
+    """Which IAM role the agent is really using (printed at startup)."""
+    try:
+        return sts.get_caller_identity()["Arn"]
+    except Exception as exc:
+        return f"unknown ({exc!r})"

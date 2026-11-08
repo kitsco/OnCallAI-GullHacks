@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OnlyTheServerRoleMayBecomeTheAgent",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::176169048305:role/oncall-ec2-role" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}

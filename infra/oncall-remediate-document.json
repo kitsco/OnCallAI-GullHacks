@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "2.2",
+  "description": "OnCall AI: the only fixes the agent can run. AWS rejects any parameter outside these values.",
+  "parameters": {
+    "Action": {
+      "type": "String",
+      "description": "Which fix to run",
+      "allowedValues": ["rollback", "scale", "restart", "fallback"]
+    },
+    "Service": {
+      "type": "String",
+      "description": "Which service it applies to",
+      "allowedValues": ["payments-api", "fraud-check"]
+    },
+    "Count": {
+      "type": "String",
+      "description": "Number of copies (scale only)",
+      "default": "2",
+      "allowedPattern": "^[1-6]$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "remediate",
+      "inputs": {
+        "timeoutSeconds": "180",
+        "runCommand": [
+          "set -euo pipefail",
+          "sudo -u ssm-user -H bash -lc 'cd ~/OnCallAI-GullHacks && python3.11 scripts/remediate.py {{Action}} {{Service}} {{Count}}'"
+        ]
+      }
+    }
+  ]
+}

@@ -4,16 +4,22 @@
 
 Part A (intake + evidence): read pages from SQS, open or join an incident, gather the snapshot.
 Part B (brain): Gemini investigates with read-only tools, proposes ONE allowed fix -> AWAITING_APPROVAL.
-Part C (hands: run the approved fix, verify, postmortem) plugs into handle_approved() later.
+Part C (hands): after a human approves on the dashboard (status REMEDIATING), run the fix through
+the SSM document, wait for it, verify the alarms return to OK, write the postmortem.
+
+Incident status flow:
+  INVESTIGATING -> AWAITING_APPROVAL -> (dashboard Approve) REMEDIATING -> VERIFYING -> RESOLVED
+                                     -> (dashboard Reject) REJECTED   (VERIFYING may also -> FAILED)
+                -> NEEDS_HUMAN (no safe automatic fix)
 """
 import json
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from agent import brain, evidence, store
-from agent.aws import queue_url, sqs
-from agent.config import GEMINI_API_KEY, GEMINI_MODEL
+from agent import actions, brain, evidence, store
+from agent.aws import identity, queue_url, sqs
+from agent.config import GEMINI_API_KEY, GEMINI_MODEL, SSM_DOCUMENT, VERIFY_SETTLE_S, VERIFY_TIMEOUT_S
 
 REVENUE_EVERY_S = 20
 LEAD_TIME = timedelta(minutes=3)  # faults start ~1.5-3 min before the alarm fires
@@ -122,13 +128,102 @@ def close_if_recovered():
         log(f"{inc['incident_id']}: closed, alarms cleared")
 
 
+def _parse(ts: str):
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+
+
+def _seconds_since(ts: str) -> float:
+    start = _parse(ts)
+    return (datetime.now(timezone.utc) - start).total_seconds() if start else 0.0
+
+
+def finish(inc: dict, status: str, result: str):
+    """Close an incident: final revenue, timings, postmortem."""
+    inc_id = inc["incident_id"]
+    now = store.now_iso()
+    opened = _parse(inc.get("opened_at"))
+    fields = {"status": status, "result": result, "resolved_at": now}
+    if opened:
+        fields["revenue_at_risk_usd"] = evidence.revenue_at_risk(opened - LEAD_TIME)
+        fields["time_to_recover_s"] = round(_seconds_since(inc["opened_at"]))
+    if inc.get("diagnosed_at"):
+        fields["time_to_diagnose_s"] = round((_parse(inc["diagnosed_at"]) - opened).total_seconds()) if opened else None
+    store.update(inc_id, **{k: v for k, v in fields.items() if v is not None})
+    latest = store.get(inc_id) or {**inc, **fields}
+    store.update(inc_id, postmortem=brain.write_postmortem(latest))
+    log(f"{inc_id}: {status}. {result}")
+
+
+def start_fix(inc: dict):
+    inc_id = inc["incident_id"]
+    pa = inc.get("proposed_action") or {}
+    proposed = brain.ProposedAction(action=pa.get("action", "none"), service=pa.get("service", "none"),
+                                    count=pa.get("count"), explain=pa.get("explain", ""))
+    problem = brain.guardrail_problem(proposed)
+    if problem or proposed.action == "none":
+        store.add_step(inc_id, f"Refused to run the fix: {problem or 'no fix proposed'}")
+        finish(inc, "FAILED", "No allowed fix to run.")
+        return
+    try:
+        command_id = actions.run_fix(proposed.action, proposed.service, proposed.count)
+    except Exception as exc:
+        store.add_step(inc_id, f"AWS refused the fix: {type(exc).__name__}: {str(exc)[:160]}")
+        finish(inc, "FAILED", "The fix could not be started.")
+        return
+    store.update(inc_id, command_id=command_id, fix_started_at=store.now_iso())
+    store.add_step(inc_id, f"Approved by a human. Running '{proposed.explain}' via SSM document "
+                           f"{SSM_DOCUMENT} (command {command_id[:8]})")
+    log(f"{inc_id}: started {proposed.action} {proposed.service} as SSM command {command_id}")
+
+
+def check_fix(inc: dict):
+    inc_id = inc["incident_id"]
+    status, output = actions.fix_status(inc["command_id"])
+    elapsed = _seconds_since(inc.get("fix_started_at"))
+    if status == "Success":
+        store.add_step(inc_id, f"Fix applied in {elapsed:.0f} s (SSM status: Success)")
+        store.add_step(inc_id, "Verifying: waiting for the alarms to return to OK")
+        store.update(inc_id, status="VERIFYING", verify_started_at=store.now_iso())
+    elif status in ("Failed", "Cancelled", "TimedOut", "Cancelling") or elapsed > 300:
+        store.add_step(inc_id, f"Fix did not complete (SSM status: {status}). {output[-200:]}")
+        finish(inc, "FAILED", f"The fix failed to run (SSM status {status}).")
+
+
+def check_recovery(inc: dict):
+    inc_id = inc["incident_id"]
+    elapsed = _seconds_since(inc.get("verify_started_at"))
+    if elapsed < VERIFY_SETTLE_S:
+        return
+    states = evidence.alarm_states(inc.get("alarms", []))
+    still = [name for name, state in states.items() if state == "ALARM"]
+    if not still:
+        total = _seconds_since(inc.get("opened_at"))
+        store.add_step(inc_id, f"Verified: all alarms back to OK, {elapsed:.0f} s after the fix")
+        finish(inc, "RESOLVED", f"{(inc.get('proposed_action') or {}).get('explain', 'Fix')}. "
+                                f"Alarms cleared {elapsed:.0f} s after the fix; {total / 60:.1f} min from page to recovery.")
+    elif elapsed > VERIFY_TIMEOUT_S:
+        store.add_step(inc_id, f"Still in alarm after {VERIFY_TIMEOUT_S // 60} min: {', '.join(still)}")
+        finish(inc, "FAILED", f"The fix ran, but {', '.join(still)} did not recover. A human should take over.")
+
+
 def handle_approved():
-    """Part C plugs in here: run approved fixes (status REMEDIATING), verify, write postmortem."""
-    return
+    """Part C: move approved incidents forward one step each loop (never blocks for long)."""
+    for inc in store.all_incidents():
+        try:
+            status = inc.get("status")
+            if status == "REMEDIATING" and inc.get("approved") and not inc.get("command_id"):
+                start_fix(inc)
+            elif status == "REMEDIATING" and inc.get("command_id"):
+                check_fix(inc)
+            elif status == "VERIFYING":
+                check_recovery(inc)
+        except Exception:
+            traceback.print_exc()
 
 
 def main():
     log(f"OnCall AI agent starting. Model: {GEMINI_MODEL}. Gemini key: {'set' if GEMINI_API_KEY else 'MISSING'}")
+    log(f"AWS identity: {identity()}")
     url = queue_url()
     log(f"listening on {url}")
     last_revenue = 0.0

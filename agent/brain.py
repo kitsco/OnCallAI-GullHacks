@@ -72,8 +72,8 @@ Allowed fixes (nothing else is possible):
 - rollback, service payments-api: go back to the last good version (v1). For bad deploys.
 - scale, service payments-api, count 1-6: change the number of copies. For real traffic overload.
 - restart, service payments-api or fraud-check: fresh containers. For leaks or stuck processes.
-- fallback, service fraud-check: payments-api skips fraud-check for charges under $200 and
-  fraud-check is restarted. For a slow or failing fraud-check.
+- fallback, service fraud-check: circuit breaker. payments-api skips fraud-check for charges under $200
+  and waits at most 250 ms for it on larger ones. For a slow or failing fraud-check.
 - none: if the evidence is unclear. Say what a human should check.
 
 Rules:
@@ -273,7 +273,7 @@ def rule_based(snap: dict) -> Diagnosis:
     if latency > 500 and fraud_latency > 500 and cpu < 50:
         return make("slow_dependency", f"payments-api is waiting on fraud-check ({fraud_latency:.0f} ms) while CPU is only {cpu:.0f}%",
                     [m["payments-api/FraudLatencyP95"]["text"], m["payments-api/CPU"]["text"]], 0.7,
-                    "fallback", "fraud-check", "Turn on the fraud fallback and restart fraud-check")
+                    "fallback", "fraud-check", "Turn on the fraud fallback (circuit breaker) so checkouts stop waiting on fraud-check")
     if cpu > 60 or requests > 2 * max(base("payments-api/Requests"), 1):
         return make("traffic_spike", f"Traffic surge: requests {requests:.0f} per 30 s vs {base('payments-api/Requests'):.0f} normally, CPU {cpu:.0f}%",
                     [m["payments-api/Requests"]["text"], m["payments-api/CPU"]["text"]], 0.65,
@@ -305,3 +305,37 @@ def diagnose(alarm_text: str, snap: dict, record_step):
     else:
         record_step("No GEMINI_API_KEY set; using backup rules")
     return rule_based(snap), "rules"
+
+
+# ---------------- Part C: postmortem ----------------
+
+def _postmortem_template(inc: dict) -> str:
+    diag = inc.get("diagnosis") or {}
+    action = inc.get("proposed_action") or {}
+    return (f"Summary: {diag.get('summary', inc.get('title', 'incident'))}.\n"
+            f"Impact: about ${inc.get('revenue_at_risk_usd', 0):,} in failed or slow charges.\n"
+            f"Root cause: {diag.get('root_cause', 'unknown')}.\n"
+            f"Fix: {inc.get('result') or action.get('explain', 'none')}\n"
+            f"Follow-up: add a check that catches this before it reaches customers.")
+
+
+def write_postmortem(inc: dict) -> str:
+    """Short postmortem from the incident record. Gemini if available, else a template."""
+    if not GEMINI_API_KEY:
+        return _postmortem_template(inc)
+    from google.genai import types
+
+    record = {k: inc.get(k) for k in ("title", "alarms", "steps", "diagnosis", "proposed_action", "result",
+                                       "revenue_at_risk_usd", "opened_at", "diagnosed_at", "fix_started_at",
+                                       "resolved_at", "time_to_recover_s")}
+    prompt = ("Write a blameless incident postmortem in under 130 words, plain text, with these labeled lines: "
+              "Summary, Impact, Timeline (3 short items with UTC times), Root cause, Fix, Follow-ups (2 items). "
+              "Use only facts from this record:\n" + json.dumps(record, default=str))
+    try:
+        config = types.GenerateContentConfig(temperature=0.2)
+        response, _ = _call(_client(), time.time() + 45, prompt, config)
+        text = (response.text or "").strip()
+        return text or _postmortem_template(inc)
+    except Exception as exc:
+        print(f"  postmortem via AI failed ({type(exc).__name__}); using template", flush=True)
+        return _postmortem_template(inc)

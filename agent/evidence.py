@@ -187,3 +187,11 @@ def revenue_at_risk(since: datetime, until: datetime = None) -> float:
         )
         total += sum(resp["MetricDataResults"][0]["Values"])
     return round(total)
+
+
+def alarm_states(names: list) -> dict:
+    """{alarm name: OK | ALARM | INSUFFICIENT_DATA} for the given alarms."""
+    if not names:
+        return {}
+    resp = cloudwatch.describe_alarms(AlarmNames=list(names))
+    return {a["AlarmName"]: a["StateValue"] for a in resp.get("MetricAlarms", [])}

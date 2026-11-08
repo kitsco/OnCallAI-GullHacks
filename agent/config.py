@@ -49,3 +49,11 @@ ALLOWED_ACTIONS = {
 SCALE_MIN, SCALE_MAX = 1, 6
 
 CLOSED_STATUSES = ("RESOLVED", "REJECTED", "FAILED")
+
+# ---- Part C: acting ----
+# The agent's own narrow IAM role, used through this AWS profile (see RUNNING.md). Empty = server role.
+AGENT_AWS_PROFILE = os.getenv("AGENT_AWS_PROFILE", "")
+SSM_DOCUMENT = os.getenv("SSM_DOCUMENT", "OnCall-Remediate")
+INSTANCE_ID = os.getenv("INSTANCE_ID", "")          # found automatically on EC2 if empty
+VERIFY_TIMEOUT_S = int(os.getenv("VERIFY_TIMEOUT_S", "300"))
+VERIFY_SETTLE_S = int(os.getenv("VERIFY_SETTLE_S", "30"))   # alarms need a moment to re-evaluate

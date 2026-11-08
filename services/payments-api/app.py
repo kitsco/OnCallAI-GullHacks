@@ -29,6 +29,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://oncall:oncall-dev-pw@post
 FRAUD_URL = os.getenv("FRAUD_URL", "http://fraud-check:8000")
 FRAUD_TIMEOUT_S = float(os.getenv("FRAUD_TIMEOUT_S", "3"))
 FALLBACK_MAX_USD = float(os.getenv("FALLBACK_MAX_USD", "200"))
+FALLBACK_WAIT_S = float(os.getenv("FALLBACK_WAIT_S", "0.25"))  # with fallback on, never wait longer for the model
 LEAK_EVERY = int(os.getenv("LEAK_EVERY", "5"))
 
 MINOR_UNITS = {"USD": 2, "EUR": 2, "GBP": 2, "JPY": 0}
@@ -111,15 +112,26 @@ def to_minor_units(amount: float, currency: str) -> int:
 
 
 async def score_with_fraud_check(body: ChargeIn):
-    """Returns (risk_score, decision, source, fraud_ms)."""
-    if flags.is_on("fraud_fallback") and body.amount < FALLBACK_MAX_USD:
-        # Fallback: simple rule instead of the fraud model. Trades a little risk for not losing sales.
+    """Returns (risk_score, decision, source, fraud_ms).
+
+    Normal: ask fraud-check and wait for its answer.
+    Fallback ON (the fix for a slow fraud-check), like a circuit breaker:
+      - charges under $200 skip the model and use a simple rule (approve),
+      - larger charges still ask the model but wait at most 250 ms; if it's slower,
+        use the rule and keep the sale. Trades a little fraud risk for not losing checkouts.
+    """
+    fallback = flags.is_on("fraud_fallback")
+    if fallback and body.amount < FALLBACK_MAX_USD:
         return None, "approve", "fallback", None
+    payload = {"amount": body.amount, "card_token": body.card_token, "merchant_id": body.merchant_id}
     start = time.perf_counter()
-    resp = await http.post(
-        f"{FRAUD_URL}/score",
-        json={"amount": body.amount, "card_token": body.card_token, "merchant_id": body.merchant_id},
-    )
+    try:
+        resp = await http.post(f"{FRAUD_URL}/score", json=payload,
+                               timeout=FALLBACK_WAIT_S if fallback else FRAUD_TIMEOUT_S)
+    except httpx.TimeoutException:
+        if not fallback:
+            raise
+        return None, "approve", "fallback-timeout", round((time.perf_counter() - start) * 1000, 1)
     fraud_ms = round((time.perf_counter() - start) * 1000, 1)
     resp.raise_for_status()
     data = resp.json()

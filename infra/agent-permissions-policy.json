@@ -1,0 +1,59 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadMetricsAndAlarms",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:GetMetricData", "cloudwatch:DescribeAlarms"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SearchOnlyTheServiceLogs",
+      "Effect": "Allow",
+      "Action": "logs:StartQuery",
+      "Resource": [
+        "arn:aws:logs:us-east-2:176169048305:log-group:/oncall/payments-api:*",
+        "arn:aws:logs:us-east-2:176169048305:log-group:/oncall/fraud-check:*"
+      ]
+    },
+    {
+      "Sid": "ReadQueryResults",
+      "Effect": "Allow",
+      "Action": "logs:GetQueryResults",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadPages",
+      "Effect": "Allow",
+      "Action": ["sqs:GetQueueUrl", "sqs:ReceiveMessage", "sqs:DeleteMessage"],
+      "Resource": "arn:aws:sqs:us-east-2:176169048305:oncall-incidents"
+    },
+    {
+      "Sid": "OwnIncidentRecords",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"],
+      "Resource": "arn:aws:dynamodb:us-east-2:176169048305:table/incidents"
+    },
+    {
+      "Sid": "ReadDeployHistory",
+      "Effect": "Allow",
+      "Action": "dynamodb:Query",
+      "Resource": "arn:aws:dynamodb:us-east-2:176169048305:table/deployments"
+    },
+    {
+      "Sid": "RunOnlyTheRemediateDocumentOnOnlyThisServer",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:us-east-2:176169048305:document/OnCall-Remediate",
+        "arn:aws:ec2:us-east-2:176169048305:instance/i-0d68125efeb1bd27c"
+      ]
+    },
+    {
+      "Sid": "CheckOwnCommands",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
+    }
+  ]
+}
