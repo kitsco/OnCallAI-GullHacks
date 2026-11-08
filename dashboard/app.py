@@ -198,7 +198,7 @@ def live_page():
     st.subheader("Break it")
     b1, b2, b3, b4, b5 = st.columns(5)
     b1.button("Bad deploy", on_click=trigger_fault, args=("bad_deploy",))
-    b2.button("Black Friday rush", on_click=trigger_fault, args=("rush",))
+    b2.button("Traffic surge", on_click=trigger_fault, args=("rush",))
     b3.button("Slow fraud check", on_click=trigger_fault, args=("slow_fraud",))
     b4.button("DB connection leak", on_click=trigger_fault, args=("db_leak",))
     b5.button("Reset", on_click=reset)
